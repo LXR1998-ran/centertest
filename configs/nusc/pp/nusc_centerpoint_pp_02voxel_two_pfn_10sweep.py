@@ -3,13 +3,15 @@ import logging
 
 from det3d.utils.config_tool import get_downsample_factor
 
+norm_cfg = None
+
 tasks = [
-    dict(num_class=1, class_names=["car"]),
-    dict(num_class=2, class_names=["truck", "construction_vehicle"]),
-    dict(num_class=2, class_names=["bus", "trailer"]),
-    dict(num_class=1, class_names=["barrier"]),
-    dict(num_class=2, class_names=["motorcycle", "bicycle"]),
-    dict(num_class=2, class_names=["pedestrian", "traffic_cone"]),
+    dict(num_class=1, class_names=["car"], stride=1),
+    dict(num_class=2, class_names=["truck", "construction_vehicle"], stride=1),
+    dict(num_class=2, class_names=["bus", "trailer"], stride=1),
+    dict(num_class=1, class_names=["barrier"], tride=1),
+    dict(num_class=2, class_names=["motorcycle", "bicycle"], stride=1),
+    dict(num_class=2, class_names=["pedestrian", "traffic_cone"], stride=1),
 ]
 
 class_names = list(itertools.chain(*[t["class_names"] for t in tasks]))
@@ -19,7 +21,8 @@ target_assigner = dict(
     tasks=tasks,
 )
 
-
+_voxel_size = (0.2, 0.2, 8)
+_pc_range = (-51.2, -51.2, -5.0, 51.2, 51.2, 3.0)
 # model settings
 model = dict(
     type="PointPillars",
@@ -29,10 +32,12 @@ model = dict(
         num_filters=[64, 64],
         num_input_features=5,
         with_distance=False,
-        voxel_size=(0.2, 0.2, 8),
-        pc_range=(-51.2, -51.2, -5.0, 51.2, 51.2, 3.0),
+        voxel_size=_voxel_size,
+        pc_range=_pc_range,
+        norm_cfg=norm_cfg,
     ),
-    backbone=dict(type="PointPillarsScatter", ds_factor=1),
+    # backbone=dict(type="PointPillarsScatter", ds_factor=1),
+    backbone=dict(type="PointPillarsScatter", num_input_features=64, norm_cfg=norm_cfg, ds_factor=1),
     neck=dict(
         type="RPN",
         layer_nums=[3, 5, 5],
@@ -41,6 +46,8 @@ model = dict(
         us_layer_strides=[0.5, 1, 2],
         us_num_filters=[128, 128, 128],
         num_input_features=64,
+        # add
+        norm_cfg=norm_cfg,
         logger=logging.getLogger("RPN"),
     ),
     bbox_head=dict(
@@ -50,7 +57,8 @@ model = dict(
         tasks=tasks,
         dataset='nuscenes',
         weight=0.25,
-        code_weights=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2, 1.0, 1.0],
+        code_weights=[4.0, 4.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2, 1.0, 1.0],
+        #code_weights=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2, 1.0, 1.0],
         common_heads={'reg': (2, 2), 'height': (1, 2), 'dim':(3, 2), 'rot':(2, 2), 'vel': (2, 2)}, # (output_channel, num_conv)
     ),
 )
@@ -77,29 +85,30 @@ test_cfg = dict(
     score_threshold=0.1,
     pc_range=[-51.2, -51.2],
     out_size_factor=get_downsample_factor(model),
-    voxel_size=[0.2, 0.2]
+    voxel_size=[0.2, 0.2],
 )
 
 # dataset settings
 dataset_type = "NuScenesDataset"
 nsweeps = 10
-data_root = "data/nuScenes"
+data_root = "/data2/xrli/datasets/nuscenes"
 
 db_sampler = dict(
     type="GT-AUG",
-    enable=False,
-    db_info_path="data/nuScenes/dbinfos_train_10sweeps_withvelo.pkl",
+    enable=True,
+    db_info_path="/data2/xrli/datasets/nuscenes/dbinfos_train_1sweeps.pkl",
+    #db_info_path="/data2/xrli/datasets/nuscenes/dbinfos_train_10sweeps_withvelo.pkl",
     sample_groups=[
         dict(car=2),
         dict(truck=3),
         dict(construction_vehicle=7),
         dict(bus=4),
         dict(trailer=6),
-        dict(barrier=2),
-        dict(motorcycle=6),
+        # dict(barrier=2),
+        dict(motorcycle=2),
         dict(bicycle=6),
         dict(pedestrian=2),
-        dict(traffic_cone=2),
+        # dict(traffic_cone=2),
     ],
     db_prep_steps=[
         dict(
@@ -118,28 +127,43 @@ db_sampler = dict(
         ),
         dict(filter_by_difficulty=[-1],),
     ],
-    global_random_rotation_range_per_object=[0, 0],
+    # global_random_rotation_range_per_object=[0, 0],
+    # rate=1.0,
     rate=1.0,
+    gt_drop_percentage=0.5,
+    gt_drop_max_keep_points=5,
+    point_dim=5,  
 )
 train_preprocessor = dict(
     mode="train",
     shuffle_points=True,
     global_rot_noise=[-0.3925, 0.3925],
+
     global_scale_noise=[0.95, 1.05],
+    global_trans_noise=[0.2, 0.2, 0.2],
+    remove_points_after_sample=False,
+    remove_unknown_examples=False,
+    min_points_in_gt=0, 
+    flip=[0.5, 0.5],
     db_sampler=db_sampler,
     class_names=class_names,
 )
 
 val_preprocessor = dict(
     mode="val",
-    shuffle_points=False,
+    shuffle_points=True,
+    # add
+    remove_environment=False,
+    remove_unknown_examples=False,
+    class_names=class_names,
 )
 
 voxel_generator = dict(
-    range=[-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
-    voxel_size=[0.2, 0.2, 8],
+    range=(-51.2, -51.2, -5.0, 51.2, 51.2, 3.0),
+    voxel_size=(0.2, 0.2, 8),
     max_points_in_voxel=20,
-    max_voxel_num=[30000, 60000],
+   # max_voxel_num=[30000, 60000],
+    max_voxel_num=30000, 
 )
 
 train_pipeline = [
@@ -147,25 +171,27 @@ train_pipeline = [
     dict(type="LoadPointCloudAnnotations", with_bbox=True),
     dict(type="Preprocess", cfg=train_preprocessor),
     dict(type="Voxelization", cfg=voxel_generator),
-    dict(type="AssignLabel", cfg=train_cfg["assigner"]),
+    dict(type="AssignTracking", cfg=train_cfg["assigner"]),
     dict(type="Reformat"),
 ]
 test_pipeline = [
-    dict(type="LoadPointCloudFromFile", dataset=dataset_type),
+    dict(type="LoadPointCloudFromFile", dataset=dataset_type, nsweeps=nsweeps),
     dict(type="LoadPointCloudAnnotations", with_bbox=True),
     dict(type="Preprocess", cfg=val_preprocessor),
     dict(type="Voxelization", cfg=voxel_generator),
-    dict(type="AssignLabel", cfg=train_cfg["assigner"]),
+    #dict(type="AssignLabel", cfg=train_cfg["assigner"]),
     dict(type="Reformat"),
 ]
 
-train_anno = "data/nuScenes/infos_train_10sweeps_withvelo_filter_True.pkl"
-val_anno = "data/nuScenes/infos_val_10sweeps_withvelo_filter_True.pkl"
+train_anno = "/data2/xrli/datasets/nuscenes/infos_train_10sweeps_tracking.pkl"
+val_anno = "/data2/xrli/datasets/nuscenes/infos_val_10sweeps_tracking.pkl"
+# train_anno = "/data2/xrli/datasets/nuscenes/infos_train_10sweeps_withvelo_filter_True.pkl"
+# val_anno = "/data2/xrli/datasets/nuscenes/infos_val_10sweeps_withvelo_filter_True.pkl"
 test_anno = None
 
 data = dict(
-    samples_per_gpu=4,
-    workers_per_gpu=8,
+    samples_per_gpu=2,
+    workers_per_gpu=2,
     train=dict(
         type=dataset_type,
         root_path=data_root,
@@ -196,20 +222,21 @@ data = dict(
     ),
 )
 
-
+"""training hooks """
 optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
 # optimizer
 optimizer = dict(
     type="adam", amsgrad=0.0, wd=0.01, fixed_wd=True, moving_average=False,
 )
 lr_config = dict(
-    type="one_cycle", lr_max=0.001, moms=[0.95, 0.85], div_factor=10.0, pct_start=0.4,
+    type="one_cycle", lr_max=0.004, moms=[0.95, 0.85], div_factor=10.0, pct_start=0.4,
 )
 
+use_syncbn = False
 checkpoint_config = dict(interval=1)
 # yapf:disable
 log_config = dict(
-    interval=5,
+    interval=50,
     hooks=[
         dict(type="TextLoggerHook"),
         # dict(type='TensorboardLoggerHook')
@@ -224,4 +251,5 @@ log_level = "INFO"
 work_dir = './work_dirs/{}/'.format(__file__[__file__.rfind('/') + 1:-3])
 load_from = None
 resume_from = None 
-workflow = [('train', 1)]
+#workflow = [('train', 1)]
+workflow = [("train", 1), ("val", 1)]

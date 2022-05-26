@@ -2,6 +2,9 @@ import argparse
 import json
 import os
 import sys
+import torch
+a=torch.Tensor([0,1])
+print(a.cuda())
 
 from numba.core.errors import NumbaDeprecationWarning, NumbaPendingDeprecationWarning, NumbaWarning
 import warnings
@@ -24,6 +27,9 @@ from det3d.torchie.apis import (
 import torch.distributed as dist
 import subprocess
 
+
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Train a detector")
     parser.add_argument("config", help="train config file path")
@@ -43,8 +49,10 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=None, help="random seed")
     parser.add_argument(
         "--launcher",
-        choices=["pytorch", "slurm"],
+        choices=["none", "pytorch", "slurm", "mpi"],
         default="pytorch",
+        #choices=["pytorch", "slurm"],
+        #default="pytorch",
         help="job launcher",
     )
     parser.add_argument("--local_rank", type=int, default=0)
@@ -70,6 +78,7 @@ def main():
     args = parse_args()
 
     cfg = Config.fromfile(args.config)
+    cfg.local_rank = args.local_rank
 
     # update configs according to CLI args
     if args.work_dir is not None:
@@ -150,6 +159,7 @@ def main():
         # checkpoints as meta data
         cfg.checkpoint_config.meta = dict(
             config=cfg.text, CLASSES=datasets[0].CLASSES
+            
         )
 
     # add an attribute for visualization convenience

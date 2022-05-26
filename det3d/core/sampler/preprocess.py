@@ -759,46 +759,112 @@ def noise_per_object_v2_(
     box3d_transform_(gt_boxes, loc_transforms, rot_transforms, valid_mask)
 
 
-def global_scaling(gt_boxes, points, scale=0.05):
-    if not isinstance(scale, list):
-        scale = [-scale, scale]
-    noise_scale = np.random.uniform(scale[0] + 1, scale[1] + 1)
+# def global_scaling(gt_boxes, points, scale=0.05):
+#     if not isinstance(scale, list):
+#         scale = [-scale, scale]
+#     noise_scale = np.random.uniform(scale[0] + 1, scale[1] + 1)
+#     points[:, :3] *= noise_scale
+#     gt_boxes[:, :6] *= noise_scale
+#     return gt_boxes, points
+
+#corrected
+def global_scaling(gt_boxes_list, points, min_scale=0.95, max_scale=1.05):
+    noise_scale = np.random.uniform(min_scale, max_scale)
     points[:, :3] *= noise_scale
-    gt_boxes[:, :6] *= noise_scale
-    return gt_boxes, points
+    for gt_boxes in gt_boxes_list:
+        gt_boxes[:, :-1] *= noise_scale
+    return gt_boxes_list, points
 
-
-def global_rotation(gt_boxes, points, rotation=np.pi / 4):
+#corrected
+def global_rotation(gt_boxes_list, points, rotation=np.pi / 4):
     if not isinstance(rotation, list):
         rotation = [-rotation, rotation]
     noise_rotation = np.random.uniform(rotation[0], rotation[1])
-    points[:, :3] = box_np_ops.rotation_points_single_angle(
-        points[:, :3], noise_rotation, axis=2
-    )
-    gt_boxes[:, :3] = box_np_ops.rotation_points_single_angle(
-        gt_boxes[:, :3], noise_rotation, axis=2
-    )
-    if gt_boxes.shape[1] > 7:
-        gt_boxes[:, 6:8] = box_np_ops.rotation_points_single_angle(
-            np.hstack([gt_boxes[:, 6:8], np.zeros((gt_boxes.shape[0], 1))]),
-            noise_rotation,
-            axis=2,
-        )[:, :2]
-    gt_boxes[:, -1] += noise_rotation
-    return gt_boxes, points
+    
+    points[:, :3] = box_np_ops.yaw_rotation(points[:, :3], noise_rotation)
+    for gt_boxes in gt_boxes_list:
+        gt_boxes[:, :3] = box_np_ops.yaw_rotation(gt_boxes[:, :3], noise_rotation)
+        if gt_boxes.shape[1] > 7:
+            gt_boxes[:, 6:8] = box_np_ops.yaw_rotation(np.hstack([gt_boxes[:, 6:8], np.zeros((gt_boxes.shape[0], 1))]),
+                noise_rotation)[:, :2]
+    
+        gt_boxes[:, -1] += noise_rotation
+
+    return gt_boxes_list, points
+
+# def global_rotation(gt_boxes, points, rotation=np.pi / 4):
+#     if not isinstance(rotation, list):
+#         rotation = [-rotation, rotation]
+#     noise_rotation = np.random.uniform(rotation[0], rotation[1])
+#     points[:, :3] = box_np_ops.rotation_points_single_angle(
+#         points[:, :3], noise_rotation, axis=2
+#     )
+#     gt_boxes[:, :3] = box_np_ops.rotation_points_single_angle(
+#         gt_boxes[:, :3], noise_rotation, axis=2
+#     )
+#     if gt_boxes.shape[1] > 7:
+#         gt_boxes[:, 6:8] = box_np_ops.rotation_points_single_angle(
+#             np.hstack([gt_boxes[:, 6:8], np.zeros((gt_boxes.shape[0], 1))]),
+#             noise_rotation,
+#             axis=2,
+#         )[:, :2]
+#     gt_boxes[:, -1] += noise_rotation
+#     return gt_boxes, points
 
 
-def random_flip(gt_boxes, points, probability=0.5):
-    enable = np.random.choice(
-        [False, True], replace=False, p=[1 - probability, probability]
-    )
-    if enable:
-        gt_boxes[:, 1] = -gt_boxes[:, 1]
-        gt_boxes[:, -1] = -gt_boxes[:, -1] + np.pi
-        points[:, 1] = -points[:, 1]
-        if gt_boxes.shape[1] > 7:  # y axis: x, y, z, w, h, l, vx, vy, r
-            gt_boxes[:, 7] = -gt_boxes[:, 7]
-    return gt_boxes, points
+# corrected
+def random_flip(gt_boxes_list, points, flip_prob=[0.5, 0.5], ):
+    assert 0 <= flip_prob[0] <=1
+    assert 0 <= flip_prob[1] <=1
+
+    # x flip
+    if flip_prob[0] > 0:
+        enable = np.random.choice(
+            [False, True], replace=False, p=[1 - flip_prob[0], flip_prob[0]]
+        )
+        if enable:
+            points[:, 1] = -points[:, 1]
+
+            for gt_boxes in gt_boxes_list:
+                gt_boxes[:, 1] = -gt_boxes[:, 1]
+                gt_boxes[:, -1] = -gt_boxes[:, -1] 
+                if gt_boxes.shape[1] > 7:  #  x, y, z, l, w, h, vx, vy, rz
+                    gt_boxes[:, 7] = -gt_boxes[:, 7] 
+
+    # y flip
+    if flip_prob[1] > 0:
+        enable = np.random.choice(
+            [False, True], replace=False, p=[1 - flip_prob[1], flip_prob[1]])
+        if enable:
+            points[:, 0] = -points[:, 0]
+            
+            for gt_boxes in gt_boxes_list:
+                gt_boxes[:, 0] = -gt_boxes[:, 0]
+                gt_boxes[:, -1] = -gt_boxes[:, -1] + np.pi  
+
+                if gt_boxes.shape[1] > 7:   #  x, y, z, l, w, h, vx, vy, rz
+                    gt_boxes[:, 6] = -gt_boxes[:, 6]
+    
+    for gt_boxes in gt_boxes_list:
+        cond = gt_boxes[:, -1] > np.pi
+        gt_boxes[cond, -1] = gt_boxes[cond, -1] - 2 * np.pi
+        
+        cond = gt_boxes[:, -1] < -np.pi
+        gt_boxes[cond, -1] = gt_boxes[cond, -1] + 2 * np.pi
+
+    return gt_boxes_list, points
+
+# def random_flip(gt_boxes, points, probability=0.5):
+#     enable = np.random.choice(
+#         [False, True], replace=False, p=[1 - probability, probability]
+#     )
+#     if enable:
+#         gt_boxes[:, 1] = -gt_boxes[:, 1]
+#         gt_boxes[:, -1] = -gt_boxes[:, -1] + np.pi
+#         points[:, 1] = -points[:, 1]
+#         if gt_boxes.shape[1] > 7:  # y axis: x, y, z, w, h, l, vx, vy, r
+#             gt_boxes[:, 7] = -gt_boxes[:, 7]
+#     return gt_boxes, points
 
 def random_flip_both(gt_boxes, points, probability=0.5, flip_coor=None):
     # x flip 

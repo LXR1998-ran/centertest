@@ -44,14 +44,23 @@ class PointPillars(SingleStageDetector):
             batch_size=batch_size,
             input_shape=example["shape"][0],
         )
-
+        #import pdb; pdb.set_trace()
         x = self.extract_feat(data)
-        preds, _ = self.bbox_head(x)
-
+        #preds, _ = self.bbox_head(x)
+        preds = self.bbox_head(x)
+        return_feature = kwargs.get('return_feature', False)
+        if return_feature:
+            return preds
+        # if return_loss:
+        #     return self.bbox_head.loss(example, preds)
+        #import pdb; pdb.set_trace()
         if return_loss:
             return self.bbox_head.loss(example, preds, self.test_cfg)
         else:
             return self.bbox_head.predict(example, preds, self.test_cfg)
+
+        # else:
+        #     return self.bbox_head.predict(example, preds, self.test_cfg)
 
     def forward_two_stage(self, example, return_loss=True, **kwargs):
         voxels = example["voxels"]

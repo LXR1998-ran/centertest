@@ -111,16 +111,17 @@ def get_obj(path):
 class LoadPointCloudFromFile(object):
     def __init__(self, dataset="KittiDataset", **kwargs):
         self.type = dataset
-        self.random_select = kwargs.get("random_select", False)
-        self.npoints = kwargs.get("npoints", 16834)
+        # self.random_select = kwargs.get("random_select", False)
+        # self.npoints = kwargs.get("npoints", 16834)
+        self.nsweeps = kwargs.get('nsweeps', -1)
 
     def __call__(self, res, info):
 
         res["type"] = self.type
 
         if self.type == "NuScenesDataset":
-
-            nsweeps = res["lidar"]["nsweeps"]
+            #edited
+            #nsweeps = res["lidar"]["nsweeps"]
 
             lidar_path = Path(info["lidar_path"])
             points = read_file(str(lidar_path), virtual=res["virtual"])
@@ -128,13 +129,14 @@ class LoadPointCloudFromFile(object):
             sweep_points_list = [points]
             sweep_times_list = [np.zeros((points.shape[0], 1))]
 
-            assert (nsweeps - 1) == len(
-                info["sweeps"]
-            ), "nsweeps {} should equal to list length {}.".format(
-                nsweeps, len(info["sweeps"])
-            )
+            # assert (nsweeps - 1) == len(
+            #     info["sweeps"]
+            # ), "nsweeps {} should equal to list length {}.".format(
+            #     nsweeps, len(info["sweeps"])
+            # )
 
-            for i in np.random.choice(len(info["sweeps"]), nsweeps - 1, replace=False):
+            #for i in np.random.choice(len(info["sweeps"]), nsweeps - 1, replace=False):
+            for i in range(len(info["sweeps"])):
                 sweep = info["sweeps"][i]
                 points_sweep, times_sweep = read_sweep(sweep, virtual=res["virtual"])
                 sweep_points_list.append(points_sweep)
@@ -143,10 +145,11 @@ class LoadPointCloudFromFile(object):
             points = np.concatenate(sweep_points_list, axis=0)
             times = np.concatenate(sweep_times_list, axis=0).astype(points.dtype)
 
-            res["lidar"]["points"] = points
-            res["lidar"]["times"] = times
-            res["lidar"]["combined"] = np.hstack([points, times])
-        
+            # res["lidar"]["points"] = points
+            # res["lidar"]["times"] = times
+            # res["lidar"]["combined"] = np.hstack([points, times])
+            res["lidar"]["points"] = np.hstack([points, times])
+
         elif self.type == "WaymoDataset":
             path = info['path']
             nsweeps = res["lidar"]["nsweeps"]
@@ -189,21 +192,39 @@ class LoadPointCloudAnnotations(object):
 
     def __call__(self, res, info):
 
-        if res["type"] in ["NuScenesDataset"] and "gt_boxes" in info:
-            gt_boxes = info["gt_boxes"].astype(np.float32)
-            gt_boxes[np.isnan(gt_boxes)] = 0
-            res["lidar"]["annotations"] = {
-                "boxes": gt_boxes,
-                "names": info["gt_names"],
-                "tokens": info["gt_boxes_token"],
-                "velocities": info["gt_boxes_velocity"].astype(np.float32),
-            }
-        elif res["type"] == 'WaymoDataset' and "gt_boxes" in info:
+        # if res["type"] in ["NuScenesDataset"] and "gt_boxes" in info:
+        #     gt_boxes = info["gt_boxes"].astype(np.float32)
+        #     gt_boxes[np.isnan(gt_boxes)] = 0
+        #     res["lidar"]["annotations"] = {
+        #         "boxes": gt_boxes,
+        #         "names": info["gt_names"],
+        #         "tokens": info["gt_boxes_token"],
+        #         "velocities": info["gt_boxes_velocity"].astype(np.float32),
+        #     }
+        # elif res["type"] == 'WaymoDataset' and "gt_boxes" in info:
+        #     res["lidar"]["annotations"] = {
+        #         "boxes": info["gt_boxes"].astype(np.float32),
+        #         "names": info["gt_names"],
+        #     }
+        # else:
+        #     pass 
+
+        # return res, info
+        if res["type"] in ["NuScenesDataset", "LyftDataset"] and "gt_boxes" in info:
+            
             res["lidar"]["annotations"] = {
                 "boxes": info["gt_boxes"].astype(np.float32),
                 "names": info["gt_names"],
+                "tokens": info["gt_boxes_token"],
             }
+
+            if 'prev_gt_boxes' in info:
+                res["lidar"]["annotations"].update(dict(
+                    prev_gt_boxes=info['prev_gt_boxes'].astype(np.float32),
+                    prev_gt_names=info['prev_gt_names'],))
+            
         else:
-            pass 
+            raise NotImplementedError
 
         return res, info
+

@@ -141,12 +141,14 @@ class PointCloudDataset(Dataset):
         """
         raise NotImplementedError
 
+    # def pre_pipeline(self, results):
+    #     results["img_prefix"] = self.img_prefix
+    #     results["seg_prefix"] = self.seg_prefix
+    #     results["proposal_file"] = self.proposal_file
+    #     results["bbox_fields"] = []
+    #     results["mask_fields"] = []
     def pre_pipeline(self, results):
-        results["img_prefix"] = self.img_prefix
-        results["seg_prefix"] = self.seg_prefix
-        results["proposal_file"] = self.proposal_file
-        results["bbox_fields"] = []
-        results["mask_fields"] = []
+        raise NotImplementedError
 
     def _filter_imgs(self, min_size=32):
         """Filter images too small."""

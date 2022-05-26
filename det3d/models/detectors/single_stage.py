@@ -41,6 +41,7 @@ class SingleStageDetector(BaseDetector):
             
     def extract_feat(self, data):
         input_features = self.reader(data)
+        import pdb; pdb.set_trace()
         x = self.backbone(input_features)
         if self.with_neck:
             x = self.neck(x)
@@ -60,3 +61,8 @@ class SingleStageDetector(BaseDetector):
             p.requires_grad = False
         FrozenBatchNorm2d.convert_frozen_batchnorm(self)
         return self
+        
+    def forward_dummy(self, example):
+        x = self.extract_feat(example)
+        outs = self.bbox_head(x)
+        return outs

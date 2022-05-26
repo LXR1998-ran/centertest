@@ -173,6 +173,7 @@ class CenterHead(nn.Module):
         dataset='nuscenes',
         weight=0.25,
         code_weights=[],
+        #common_heads,
         common_heads=dict(),
         logger=None,
         init_bias=-2.19,
@@ -241,7 +242,7 @@ class CenterHead(nn.Module):
         for task in self.tasks:
             ret_dicts.append(task(x))
 
-        return ret_dicts, x
+        return ret_dicts #, x
 
     def _sigmoid(self, x):
         y = torch.clamp(x.sigmoid_(), min=1e-4, max=1-1e-4)
@@ -257,6 +258,7 @@ class CenterHead(nn.Module):
 
             target_box = example['anno_box'][task_id]
             # reconstruct the anno_box from multiple reg heads
+            #import pdb; pdb.set_trace()
             if self.dataset in ['waymo', 'nuscenes']:
                 if 'vel' in preds_dict:
                     preds_dict['anno_box'] = torch.cat((preds_dict['reg'], preds_dict['height'], preds_dict['dim'],
@@ -297,9 +299,9 @@ class CenterHead(nn.Module):
         # get loss info
         rets = []
         metas = []
-
+        
         double_flip = test_cfg.get('double_flip', False)
-
+        #import pdb; pdb.set_trace()
         post_center_range = test_cfg.post_center_limit_range
         if len(post_center_range) > 0:
             post_center_range = torch.tensor(
@@ -310,7 +312,7 @@ class CenterHead(nn.Module):
 
         for task_id, preds_dict in enumerate(preds_dicts):
             # convert N C H W to N H W C 
-            for key, val in preds_dict.items():
+            for key, val in preds_dict.items(): # reg, height, dim, rot, vel, hm
                 preds_dict[key] = val.permute(0, 2, 3, 1).contiguous()
 
             batch_size = preds_dict['hm'].shape[0]
@@ -347,7 +349,7 @@ class CenterHead(nn.Module):
             batch_rotc = preds_dict['rot'][..., 1:2]
             batch_reg = preds_dict['reg']
             batch_hei = preds_dict['height']
-
+           
             if double_flip:
                 batch_hm = batch_hm.mean(dim=1)
                 batch_hei = batch_hei.mean(dim=1)
@@ -378,7 +380,7 @@ class CenterHead(nn.Module):
 
                 batch_rotc = batch_rotc.mean(dim=1)
                 batch_rots = batch_rots.mean(dim=1)
-
+            # atan2:返回一个新张量，包含两个输入张量input1和input2的反正切函数
             batch_rot = torch.atan2(batch_rots, batch_rotc)
 
             batch, H, W, num_cls = batch_hm.size()
@@ -448,9 +450,9 @@ class CenterHead(nn.Module):
         return ret_list 
 
     @torch.no_grad()
-    def post_processing(self, batch_box_preds, batch_hm, test_cfg, post_center_range, task_id):
+    def post_processing(self, batch_box_preds, batch_hm, test_cfg, post_center_range):
         batch_size = len(batch_hm)
-
+        #import pdb; pdb.set_trace()
         prediction_dicts = []
         for i in range(batch_size):
             box_preds = batch_box_preds[i]
@@ -458,10 +460,10 @@ class CenterHead(nn.Module):
 
             scores, labels = torch.max(hm_preds, dim=-1)
 
-            score_mask = scores > test_cfg.score_threshold
+            score_mask = scores > test_cfg.score_threshold # threshold = 0.1
             distance_mask = (box_preds[..., :3] >= post_center_range[:3]).all(1) \
                 & (box_preds[..., :3] <= post_center_range[3:]).all(1)
-
+            #post_center_range[:3] = tensor([-61.2000, -61.2000, -10.0000], device='cuda:0')
             mask = distance_mask & score_mask 
 
             box_preds = box_preds[mask]
@@ -470,15 +472,10 @@ class CenterHead(nn.Module):
 
             boxes_for_nms = box_preds[:, [0, 1, 2, 3, 4, 5, -1]]
 
-            if test_cfg.get('circular_nms', False):
-                centers = boxes_for_nms[:, [0, 1]] 
-                boxes = torch.cat([centers, scores.view(-1, 1)], dim=1)
-                selected = _circle_nms(boxes, min_radius=test_cfg.min_radius[task_id], post_max_size=test_cfg.nms.nms_post_max_size)  
-            else:
-                selected = box_torch_ops.rotate_nms_pcdet(boxes_for_nms.float(), scores.float(), 
-                                    thresh=test_cfg.nms.nms_iou_threshold,
-                                    pre_maxsize=test_cfg.nms.nms_pre_max_size,
-                                    post_max_size=test_cfg.nms.nms_post_max_size)
+            selected = box_torch_ops.rotate_nms_pcdet(boxes_for_nms, scores, 
+                                thresh=test_cfg.nms.nms_iou_threshold,
+                                pre_maxsize=test_cfg.nms.nms_pre_max_size,
+                                post_max_size=test_cfg.nms.nms_post_max_size)
 
             selected_boxes = box_preds[selected]
             selected_scores = scores[selected]
@@ -493,6 +490,240 @@ class CenterHead(nn.Module):
             prediction_dicts.append(prediction_dict)
 
         return prediction_dicts 
+    # def post_processing(self, batch_box_preds, batch_hm, test_cfg, post_center_range):
+    #     batch_size = len(batch_hm)
+    #     #import pdb; pdb.set_trace()
+    #     prediction_dicts = []
+    #     for i in range(batch_size):
+    #         box_preds = batch_box_preds[i]
+    #         hm_preds = batch_hm[i]
+
+    #         scores, labels = torch.max(hm_preds, dim=-1)
+
+    #         score_mask = scores > test_cfg.score_threshold
+    #         distance_mask = (box_preds[..., :3] >= post_center_range[:3]).all(1) \
+    #             & (box_preds[..., :3] <= post_center_range[3:]).all(1)
+
+    #         mask = distance_mask & score_mask 
+
+    #         box_preds = box_preds[mask]
+    #         scores = scores[mask]
+    #         labels = labels[mask]
+
+    #         boxes_for_nms = box_preds[:, [0, 1, 2, 3, 4, 5, -1]]
+
+    #         if test_cfg.get('circular_nms', False):
+    #             centers = boxes_for_nms[:, [0, 1]] 
+    #             boxes = torch.cat([centers, scores.view(-1, 1)], dim=1)
+    #             selected = _circle_nms(boxes, min_radius=test_cfg.min_radius[task_id], post_max_size=test_cfg.nms.nms_post_max_size)  
+    #         else:
+    #             selected = box_torch_ops.rotate_nms_pcdet(boxes_for_nms.float(), scores.float(), 
+    #                                 thresh=test_cfg.nms.nms_iou_threshold,
+    #                                 pre_maxsize=test_cfg.nms.nms_pre_max_size,
+    #                                 post_max_size=test_cfg.nms.nms_post_max_size)
+
+    #         selected_boxes = box_preds[selected]
+    #         selected_scores = scores[selected]
+    #         selected_labels = labels[selected]
+
+    #         prediction_dict = {
+    #             'box3d_lidar': selected_boxes,
+    #             'scores': selected_scores,
+    #             'label_preds': selected_labels
+    #         }
+
+    #         prediction_dicts.append(prediction_dict)
+
+    #     return prediction_dicts 
+
+    @torch.no_grad()
+    def predict_tracking(self, example, preds_dicts, test_cfg, **kwargs):
+        """decode, nms, then return the detection result.
+        """
+        #import pdb; pdb.set_trace()
+        rets = []
+        metas = []
+        post_center_range = test_cfg.post_center_limit_range
+
+        if len(post_center_range) > 0:
+            post_center_range = torch.tensor(
+                post_center_range,
+                dtype=preds_dicts[0]['hm'].dtype,
+                device=preds_dicts[0]['hm'].device)
+
+        prev_track_id = kwargs.get('prev_track_id', None)
+
+        if prev_track_id is not None:
+            track_rets = []
+            prev_hm = kwargs['prev_hm']
+            
+        for task_id, preds_dict in enumerate(preds_dicts):
+            new_obj = [{}]
+            # convert N C H W to N H W C 
+            for key, val in preds_dict.items(): # key: reg,rot,vel,hei, dim
+                preds_dict[key] = val.permute(0, 2, 3, 1).contiguous()
+            
+            batch_size = preds_dict['hm'].shape[0]
+
+            if "metadata" not in example or len(example["metadata"]) == 0:
+                meta_list = [None] * batch_size
+            else:
+                meta_list = example["metadata"]
+
+            ######################################################
+            batch_hm = torch.sigmoid(preds_dict['hm'])
+            batch_dim = torch.exp(preds_dict['dim'])
+            batch_rots = preds_dict['rot'][..., 0:1]
+            batch_rotc = preds_dict['rot'][..., 1:2]
+            batch_reg = preds_dict['reg']
+            batch_hei = preds_dict['height']
+
+            batch_rot = torch.atan2(batch_rots, batch_rotc)
+
+            batch, H, W, num_cls = batch_hm.size()
+
+            batch_reg = batch_reg.reshape(batch, H*W, 2) #location refinement
+            batch_hei = batch_hei.reshape(batch, H*W, 1)
+            batch_rot = batch_rot.reshape(batch, H*W, 1)
+            batch_dim = batch_dim.reshape(batch, H*W, 3) #3d size
+            batch_hm = batch_hm.reshape(batch, H*W, num_cls)
+            
+            # generate 2d grid on xy flat/ 
+            # to read tracking_id that share the same cells on Yt and Zt-1
+            ys, xs = torch.meshgrid([torch.arange(0, H), torch.arange(0, W)])
+            ys = ys.float().unsqueeze(0).to(preds_dicts[0]['hm'].device)
+            xs = xs.float().unsqueeze(0).to(preds_dicts[0]['hm'].device)
+            xs = xs.view(batch, -1, 1) + batch_reg[:, :, 0:1]
+            ys = ys.view(batch, -1, 1) + batch_reg[:, :, 1:2]
+
+            xs = xs * test_cfg.out_size_factor * test_cfg.voxel_size[0] + test_cfg.pc_range[0]
+            ys = ys * test_cfg.out_size_factor * test_cfg.voxel_size[1] + test_cfg.pc_range[1]
+
+            batch_vel = preds_dict['vel']
+
+            batch_vel = batch_vel.reshape(batch, H*W, 2)
+            batch_box_preds = torch.cat([xs, ys, batch_hei, batch_dim, batch_vel, batch_rot], dim=2)
+        
+            metas.append(meta_list)
+
+            if prev_track_id is not None:
+                tracking_batch_hm =  (batch_hm + prev_hm[task_id]) / 2.0  
+                # threshold and NMS on Yt
+    
+                tracking = self.post_processing_tracking(batch_box_preds, tracking_batch_hm, prev_track_id[task_id], test_cfg, post_center_range) 
+                
+                for bit in range(len(tracking)):
+                    cond = tracking[bit]['tracking_id'] == -1 # new obj
+                    for tk in tracking[0].keys(): # box3d_lidar, scroes, label_preds, tracking_id
+                        if tk != 'tracking_id':
+                            new_obj[bit][tk] = tracking[bit][tk][cond]
+                
+                for bit in range(len(tracking)):
+                    cond = tracking[bit]['tracking_id'] != -1
+                    for tk in tracking[0].keys():
+
+                        tracking[bit][tk] = tracking[bit][tk][cond]
+                
+                track_rets.append(tracking)
+                    
+            else: # t = 0
+                new_obj = self.post_processing(batch_box_preds, batch_hm, test_cfg, post_center_range)
+            
+            rets.append(new_obj)
+            
+        # Merge branches results
+        ret_list = []
+        num_samples = len(rets[0])
+
+        # initialize new-born tracking identities on Yt
+        for i in range(num_samples):
+            ret = {}
+            for k in rets[0][i].keys(): # k:box3d_lidar, scroes, label_preds, selected_id
+                if k in ["box3d_lidar", "scores", "selected_id"]:
+                    ret[k] = torch.cat([retss[i][k] for retss in rets])
+                elif k in ["label_preds"]:
+                    flag = 0
+                    for j, num_class in enumerate(self.num_classes):
+                        rets[j][i][k] += flag
+                        flag += num_class
+                        
+                    ret[k] = torch.cat([retss[i][k] for retss in rets])
+
+            ret['metadata'] = metas[0][i] # 'metadata': {'image_prefix': PosixPath('/data2/xrli/datasets/nuscenes')
+            ret_list.append(ret)
+
+        if prev_track_id is not None:
+            #####build up track_rets_list
+            track_rets_list = []
+            num_tracks = len(track_rets[0])
+            for i in range(num_tracks):
+                ret = {}
+                for k in ['box3d_lidar', 'scores', 'label_preds', 'tracking_id']:
+                    if k in ["box3d_lidar", "scores", 'tracking_id']:
+                        ret[k] = torch.cat([retss[i][k] for retss in track_rets])
+                    elif k in ["label_preds"]:
+                        flag = 0
+                        for j, num_class in enumerate(self.num_classes):
+                            track_rets[j][i][k] += flag
+                            flag += num_class
+                        ret[k] = torch.cat([retss[i][k] for retss in track_rets])
+
+                ret['metadata'] = metas[0][i]
+                track_rets_list.append(ret)
+
+            return ret_list, track_rets_list
+        else:
+            return ret_list
+    
+    @torch.no_grad()
+    def post_processing_tracking(self, batch_box_preds, batch_hm, prev_tracking_id, test_cfg, post_center_range):
+        batch_size = len(batch_hm)
+        #import pdb; pdb.set_trace()
+        prediction_dicts = []
+        for i in range(batch_size):
+            box_preds = batch_box_preds[i].clone()
+            hm_preds = batch_hm[i].clone()
+            prev_id = prev_tracking_id[i]
+            scores, labels = torch.max(hm_preds, dim=-1)
+            prev_id = torch.gather(prev_id, dim=1, index=labels.unsqueeze(-1)).squeeze(-1)
+            score_mask = scores > test_cfg.score_threshold
+            distance_mask = (box_preds[..., :3] >= post_center_range[:3]).all(1) \
+                & (box_preds[..., :3] <= post_center_range[3:]).all(1)
+
+            mask = distance_mask & score_mask 
+            
+            box_preds = box_preds[mask]
+            scores = scores[mask]
+            labels = labels[mask]
+            prev_id = prev_id[mask]
+
+            boxes_for_nms = box_preds[:, [0, 1, 2, 3, 4, 5, -1]]
+            selected = box_torch_ops.rotate_nms_pcdet(boxes_for_nms, scores, 
+                                thresh=test_cfg.nms.nms_iou_threshold,
+                                pre_maxsize=test_cfg.nms.nms_pre_max_size,
+                                post_max_size=test_cfg.nms.nms_post_max_size)
+
+            selected_boxes = box_preds[selected]
+            selected_scores = scores[selected]
+            selected_labels = labels[selected]
+            selected_id = prev_id[selected]
+
+            prediction_dict = {
+                'box3d_lidar': selected_boxes,
+                'scores': selected_scores,
+                'label_preds': selected_labels,
+                "tracking_id": selected_id,
+            }
+
+            prediction_dicts.append(prediction_dict)
+
+        return prediction_dicts 
+
+
+
+
+
+
 
 import numpy as np 
 def _circle_nms(boxes, min_radius, post_max_size=83):
@@ -500,7 +731,7 @@ def _circle_nms(boxes, min_radius, post_max_size=83):
     NMS according to center distance
     """
     keep = np.array(circle_nms(boxes.cpu().numpy(), thresh=min_radius))[:post_max_size]
-
+    import pdb; pdb.set_trace()
     keep = torch.from_numpy(keep).long().to(boxes.device)
 
     return keep  

@@ -143,38 +143,54 @@ def rbbox2d_to_near_bbox(rbboxes):
     return bboxes
 
 
-def rotation_3d_in_axis(points, angles, axis=0):
+# def rotation_3d_in_axis(points, angles, axis=0):
+#     # points: [N, point_size, 3]
+#     rot_sin = np.sin(angles)
+#     rot_cos = np.cos(angles)
+#     ones = np.ones_like(rot_cos)
+#     zeros = np.zeros_like(rot_cos)
+#     if axis == 1:
+#         rot_mat_T = np.stack(
+#             [
+#                 [rot_cos, zeros, -rot_sin],
+#                 [zeros, ones, zeros],
+#                 [rot_sin, zeros, rot_cos],
+#             ]
+#         )
+#     elif axis == 2 or axis == -1:
+#         rot_mat_T = np.stack(
+#             [
+#                 [rot_cos, -rot_sin, zeros],
+#                 [rot_sin, rot_cos, zeros],
+#                 [zeros, zeros, ones],
+#             ]
+#         )
+#     elif axis == 0:
+#         rot_mat_T = np.stack(
+#             [
+#                 [zeros, rot_cos, -rot_sin],
+#                 [zeros, rot_sin, rot_cos],
+#                 [ones, zeros, zeros],
+#             ]
+#         )
+#     else:
+#         raise ValueError("axis should in range")
+
+#     return np.einsum("aij,jka->aik", points, rot_mat_T)
+def rotation_3d_in_axis(points, angles):  # corrected
     # points: [N, point_size, 3]
     rot_sin = np.sin(angles)
     rot_cos = np.cos(angles)
     ones = np.ones_like(rot_cos)
     zeros = np.zeros_like(rot_cos)
-    if axis == 1:
-        rot_mat_T = np.stack(
-            [
-                [rot_cos, zeros, -rot_sin],
-                [zeros, ones, zeros],
-                [rot_sin, zeros, rot_cos],
-            ]
-        )
-    elif axis == 2 or axis == -1:
-        rot_mat_T = np.stack(
-            [
-                [rot_cos, -rot_sin, zeros],
-                [rot_sin, rot_cos, zeros],
-                [zeros, zeros, ones],
-            ]
-        )
-    elif axis == 0:
-        rot_mat_T = np.stack(
-            [
-                [zeros, rot_cos, -rot_sin],
-                [zeros, rot_sin, rot_cos],
-                [ones, zeros, zeros],
-            ]
-        )
-    else:
-        raise ValueError("axis should in range")
+   
+    rot_mat_T = np.stack(
+        [
+            [rot_cos,  rot_sin, zeros],
+            [-rot_sin, rot_cos, zeros],
+            [zeros, zeros, ones],
+        ]
+    )
 
     return np.einsum("aij,jka->aik", points, rot_mat_T)
 
@@ -203,6 +219,15 @@ def rotation_points_single_angle(points, angle, axis=0):
 
     return points @ rot_mat_T
 
+def yaw_rotation(points, yaw): # corrected 
+    # points: [N, 3]
+    rot_sin = np.sin(yaw)
+    rot_cos = np.cos(yaw)
+    
+    rot_mat = np.array([[rot_cos, -rot_sin, 0], [rot_sin, rot_cos, 0], [0, 0, 1]], dtype=points.dtype)
+
+    return points@rot_mat.T
+
 
 def rotation_2d(points, angles):
     """rotation 2d points based on origin point clockwise when angle positive.
@@ -216,7 +241,7 @@ def rotation_2d(points, angles):
     """
     rot_sin = np.sin(angles)
     rot_cos = np.cos(angles)
-    rot_mat_T = np.stack([[rot_cos, -rot_sin], [rot_sin, rot_cos]])
+    rot_mat_T = np.stack([[rot_cos, rot_sin], [-rot_sin, rot_cos]])
     return np.einsum("aij,jka->aik", points, rot_mat_T)
 
 

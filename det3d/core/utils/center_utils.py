@@ -45,7 +45,7 @@ def gaussian2D(shape, sigma=1):
     return h
 
 
-def draw_umich_gaussian(heatmap, center, radius, k=1):
+def draw_umich_gaussian(heatmap, center, radius, value): #draw_umich_gaussian
     diameter = 2 * radius + 1
     gaussian = gaussian2D((diameter, diameter), sigma=diameter / 6)
 
@@ -59,7 +59,7 @@ def draw_umich_gaussian(heatmap, center, radius, k=1):
     masked_heatmap  = heatmap[y - top:y + bottom, x - left:x + right]
     masked_gaussian = gaussian[radius - top:radius + bottom, radius - left:radius + right]
     if min(masked_gaussian.shape) > 0 and min(masked_heatmap.shape) > 0: # TODO debug
-        np.maximum(masked_heatmap, masked_gaussian * k, out=masked_heatmap)
+        np.maximum(masked_heatmap, masked_gaussian * value, out=masked_heatmap)
     return heatmap
 
 def _gather_feat(feat, ind, mask=None):

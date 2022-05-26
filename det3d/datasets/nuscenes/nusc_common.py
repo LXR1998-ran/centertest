@@ -12,6 +12,7 @@ try:
     from nuscenes import NuScenes
     from nuscenes.utils import splits
     from nuscenes.utils.data_classes import Box
+    from nuscenes.utils.data_classes import LidarPointCloud
     from nuscenes.utils.geometry_utils import transform_matrix
     from nuscenes.eval.detection.config import config_factory
     from nuscenes.eval.detection.evaluate import NuScenesEval
@@ -19,7 +20,7 @@ except:
     print("nuScenes devkit not Found!")
 
 general_to_detection = {
-    "human.pedestrian.adult": "pedestrian",
+     "human.pedestrian.adult": "pedestrian",
     "human.pedestrian.child": "pedestrian",
     "human.pedestrian.wheelchair": "ignore",
     "human.pedestrian.stroller": "ignore",
@@ -42,6 +43,8 @@ general_to_detection = {
     "movable_object.pushable_pullable": "ignore",
     "movable_object.debris": "ignore",
     "static_object.bicycle_rack": "ignore",
+    "new_obj": "new_obj",
+    "disappear": "disappear",
 }
 
 cls_attr_dist = {
@@ -161,7 +164,8 @@ def _second_det_to_nusc_box(detection):
     box3d = detection["box3d_lidar"].detach().cpu().numpy()
     scores = detection["scores"].detach().cpu().numpy()
     labels = detection["label_preds"].detach().cpu().numpy()
-    box3d[:, -1] = -box3d[:, -1] - np.pi / 2
+    #box3d[:, -1] = -box3d[:, -1] - np.pi / 2
+    box3d = box3d[:, [0,1,2,4,3,5,6,7,8]]
     box_list = []
     for i in range(box3d.shape[0]):
         quat = Quaternion(axis=[0, 0, 1], radians=box3d[i, -1])
@@ -177,6 +181,65 @@ def _second_det_to_nusc_box(detection):
         box_list.append(box)
     return box_list
 
+def box_velocity(
+    nusc, sample_annotation_token: str, max_time_diff: float = 1.5
+) -> np.ndarray:
+    """
+    Estimate the velocity for an annotation.
+    If possible, we compute the centered difference between the previous and next frame.
+    Otherwise we use the difference between the current and previous/next frame.
+    If the velocity cannot be estimated, values are set to np.nan.
+    :param sample_annotation_token: Unique sample_annotation identifier.
+    :param max_time_diff: Max allowed time diff between consecutive samples that are used to estimate velocities.
+    :return: <np.float: 3>. Velocity in x/y/z direction in m/s.
+    """
+
+    current = nusc.get("sample_annotation", sample_annotation_token)
+    has_prev = current["prev"] != ""
+    has_next = current["next"] != ""
+
+    # Cannot estimate velocity for a single annotation.
+    if not has_prev and not has_next:
+        return np.array([np.nan, np.nan, np.nan])
+
+    if has_prev:
+        first = nusc.get("sample_annotation", current["prev"])
+    else:
+        first = current
+
+    if has_next:
+        last = nusc.get("sample_annotation", current["next"])
+    else:
+        last = current
+
+    pos_last = np.array(last["translation"])
+    pos_first = np.array(first["translation"])
+    pos_diff = pos_last - pos_first
+
+    time_last = 1e-6 * nusc.get("sample", last["sample_token"])["timestamp"]
+    time_first = 1e-6 * nusc.get("sample", first["sample_token"])["timestamp"]
+    time_diff = time_last - time_first
+
+    if has_next and has_prev:
+        # If doing centered difference, allow for up to double the max_time_diff.
+        max_time_diff *= 2
+
+    if time_diff > max_time_diff:
+        # If time_diff is too big, don't return an estimate.
+        return np.array([np.nan, np.nan, np.nan])
+    else:
+        return pos_diff / time_diff
+
+def remove_close(points, radius: float) -> None:
+    """
+    Removes point too close within a certain radius from origin.
+    :param radius: Radius below which points are removed.
+    """
+    x_filt = np.abs(points[0, :]) < radius
+    y_filt = np.abs(points[1, :]) < radius
+    not_close = np.logical_not(np.logical_and(x_filt, y_filt))
+    points = points[:, not_close]
+    return points
 
 def _lidar_nusc_box_to_global(nusc, boxes, sample_token):
     try:
@@ -187,8 +250,10 @@ def _lidar_nusc_box_to_global(nusc, boxes, sample_token):
 
     sd_record = nusc.get("sample_data", sample_data_token)
     cs_record = nusc.get("calibrated_sensor", sd_record["calibrated_sensor_token"])
+    sensor_record = nusc.get("sensor", cs_record["sensor_token"])
     pose_record = nusc.get("ego_pose", sd_record["ego_pose_token"])
-
+    
+    data_path = nusc.get_sample_data_path(sample_data_token)
     box_list = []
     for box in boxes:
         # Move box to ego vehicle coord system
@@ -246,8 +311,10 @@ def get_sample_data(
 
     if sensor_record["modality"] == "camera":
         cam_intrinsic = np.array(cs_record["camera_intrinsic"])
+        imsize = (sd_record["width"], sd_record["height"])
     else:
         cam_intrinsic = None
+        imsize = None
 
     # Retrieve all sample annotations and map to sensor coordinate system.
     if selected_anntokens is not None:
@@ -272,6 +339,17 @@ def get_sample_data(
     return data_path, box_list, cam_intrinsic
 
 CAM_CHANS = ['CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_BACK_RIGHT', 'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_FRONT_LEFT']
+
+def get_box_mean(info_path, class_name="vehicle.car"):
+    with open(info_path, "rb") as f:
+        nusc_infos = pickle.load(f)
+
+    gt_boxes_list = []
+    for info in nusc_infos:
+        mask = np.array([s == class_name for s in info["gt_names"]], dtype=np.bool_)
+        gt_boxes_list.append(info["gt_boxes"][mask].reshape(-1, 7))
+    gt_boxes_list = np.concatenate(gt_boxes_list, axis=0)
+    print(gt_boxes_list.mean(0))
 
 
 def get_lidar_to_image_transform(nusc, pointsensor,  camera_sensor):
@@ -321,6 +399,33 @@ def get_lidar_to_image_transform(nusc, pointsensor,  camera_sensor):
 
     return tms, intrinsics, cam_paths  
 
+
+def get_sample_ground_plane(root_path, version):
+    nusc = NuScenes(version=version, dataroot=root_path, verbose=True)
+    rets = {}
+
+    for sample in tqdm(nusc.sample):
+        chan = "LIDAR_TOP"
+        sd_token = sample["data"][chan]
+        sd_rec = nusc.get("sample_data", sd_token)
+
+        lidar_path, _, _ = get_sample_data(nusc, sd_token)
+        points = read_file(lidar_path)
+        points = np.concatenate((points[:, :3], np.ones((points.shape[0], 1))), axis=1)
+
+        plane, inliers, outliers = fit_plane_LSE_RANSAC(
+            points, return_outlier_list=True
+        )
+
+        xx = points[:, 0]
+        yy = points[:, 1]
+        zz = (-plane[0] * xx - plane[1] * yy - plane[3]) / plane[2]
+
+        rets.update({sd_token: {"plane": plane, "height": zz,}})
+
+    with open(nusc.root_path / "infos_trainval_ground_plane.pkl", "wb") as f:
+        pickle.dump(rets, f)
+
 def find_closet_camera_tokens(nusc, pointsensor, ref_sample):
     lidar_timestamp = pointsensor["timestamp"]
 
@@ -351,7 +456,7 @@ def find_closet_camera_tokens(nusc, pointsensor, ref_sample):
     return min_cams     
 
 
-def _fill_trainval_infos(nusc, train_scenes, val_scenes, test=False, nsweeps=10, filter_zero=True):
+def _fill_trainval_infos(nusc, train_scenes, val_scenes, test=False, nsweeps=10):
     from nuscenes.utils.geometry_utils import transform_matrix
 
     train_nusc_infos = []
@@ -361,7 +466,7 @@ def _fill_trainval_infos(nusc, train_scenes, val_scenes, test=False, nsweeps=10,
     chan = "LIDAR_TOP"  # The reference channel of the current sample_rec that the point clouds are mapped to.
 
     for sample in tqdm(nusc.sample):
-        """ Manual save info["sweeps"] """        
+        """ Manual save info["sweeps"] """
         # Get reference pose and timestamp
         # ref_chan == "LIDAR_TOP"
         ref_sd_token = sample["data"][ref_chan]
@@ -389,17 +494,6 @@ def _fill_trainval_infos(nusc, train_scenes, val_scenes, test=False, nsweeps=10,
             inverse=True,
         )
 
-        ref_cams = {}
-        # get all camera sensor data
-        for cam_chan in CAM_CHANS:
-            camera_token = sample['data'][cam_chan]
-            cam = nusc.get('sample_data', camera_token)
-
-            ref_cams[cam_chan] = cam 
-
-        # get camera info for point painting 
-        all_cams_from_lidar, all_cams_intrinsic, all_cams_path = get_lidar_to_image_transform(nusc, pointsensor=ref_sd_rec, camera_sensor=ref_cams)    
-
         info = {
             "lidar_path": ref_lidar_path,
             "cam_front_path": ref_cam_path,
@@ -409,9 +503,6 @@ def _fill_trainval_infos(nusc, train_scenes, val_scenes, test=False, nsweeps=10,
             "ref_from_car": ref_from_car,
             "car_from_global": car_from_global,
             "timestamp": ref_time,
-            "all_cams_from_lidar": all_cams_from_lidar,
-            "all_cams_intrinsic": all_cams_intrinsic,
-            "all_cams_path": all_cams_path
         }
 
         sample_data_token = sample["data"][chan]
@@ -425,19 +516,13 @@ def _fill_trainval_infos(nusc, train_scenes, val_scenes, test=False, nsweeps=10,
                         "sample_data_token": curr_sd_rec["token"],
                         "transform_matrix": None,
                         "time_lag": curr_sd_rec["timestamp"] * 0,
-                        "all_cams_from_lidar": all_cams_from_lidar,
-                        "all_cams_intrinsic": all_cams_intrinsic,
-                        "all_cams_path": all_cams_path
+                        # time_lag: 0,
                     }
                     sweeps.append(sweep)
                 else:
                     sweeps.append(sweeps[-1])
             else:
                 curr_sd_rec = nusc.get("sample_data", curr_sd_rec["prev"])
-
-                # get nearest camera frame data 
-                cam_data = find_closet_camera_tokens(nusc, curr_sd_rec, ref_sample=sample)
-                cur_cams_from_lidar, cur_cams_intrinsic, cur_cams_path = get_lidar_to_image_transform(nusc, pointsensor=curr_sd_rec, camera_sensor=cam_data)   
 
                 # Get past pose
                 current_pose_rec = nusc.get("ego_pose", curr_sd_rec["ego_pose_token"])
@@ -473,9 +558,6 @@ def _fill_trainval_infos(nusc, train_scenes, val_scenes, test=False, nsweeps=10,
                     "global_from_car": global_from_car,
                     "car_from_current": car_from_current,
                     "time_lag": time_lag,
-                    "all_cams_from_lidar": cur_cams_from_lidar,
-                    "all_cams_intrinsic": cur_cams_intrinsic,
-                    "all_cams_path": cur_cams_path
                 }
                 sweeps.append(sweep)
 
@@ -483,8 +565,33 @@ def _fill_trainval_infos(nusc, train_scenes, val_scenes, test=False, nsweeps=10,
 
         assert (
             len(info["sweeps"]) == nsweeps - 1
-        )
-        
+        ), f"sweep {curr_sd_rec['token']} only has {len(info['sweeps'])} sweeps, you should duplicate to sweep num {nsweeps-1}"
+        """ read from api """
+        # sd_record = nusc.get('sample_data', sample['data']['LIDAR_TOP'])
+        #
+        # # Get boxes in lidar frame.
+        # lidar_path, boxes, cam_intrinsic = nusc.get_sample_data(
+        #     sample['data']['LIDAR_TOP'])
+        #
+        # # Get aggregated point cloud in lidar frame.
+        # sample_rec = nusc.get('sample', sd_record['sample_token'])
+        # chan = sd_record['channel']
+        # ref_chan = 'LIDAR_TOP'
+        # pc, times = LidarPointCloud.from_file_multisweep(nusc,
+        #                                                  sample_rec,
+        #                                                  chan,
+        #                                                  ref_chan,
+        #                                                  nsweeps=nsweeps)
+        # lidar_path = osp.join(nusc.dataroot, "sample_10sweeps/LIDAR_TOP",
+        #                       sample['data']['LIDAR_TOP'] + ".bin")
+        # pc.points.astype('float32').tofile(open(lidar_path, "wb"))
+        #
+        # info = {
+        #     "lidar_path": lidar_path,
+        #     "token": sample["token"],
+        #     # "timestamp": times,
+        # }
+
         if not test:
             annotations = [
                 nusc.get("sample_annotation", token) for token in sample["anns"]
@@ -494,30 +601,29 @@ def _fill_trainval_infos(nusc, train_scenes, val_scenes, test=False, nsweeps=10,
 
             locs = np.array([b.center for b in ref_boxes]).reshape(-1, 3)
             dims = np.array([b.wlh for b in ref_boxes]).reshape(-1, 3)
-            # rots = np.array([b.orientation.yaw_pitch_roll[0] for b in ref_boxes]).reshape(-1, 1)
-            velocity = np.array([b.velocity for b in ref_boxes]).reshape(-1, 3)
+            
+            velocity = np.array([box_velocity(nusc, token)[:2] for token in sample['anns']])
+            for i in range(len(ref_boxes)):
+                velo = np.array([*velocity[i], 0.0])
+                velo = ref_from_car[:3, :3] @ car_from_global[:3, :3] @ velo
+                velocity[i] = velo[:2]
+            velocity = velocity.reshape(-1, 2)
+
             rots = np.array([quaternion_yaw(b.orientation) for b in ref_boxes]).reshape(
                 -1, 1
             )
             names = np.array([b.name for b in ref_boxes])
             tokens = np.array([b.token for b in ref_boxes])
             gt_boxes = np.concatenate(
-                [locs, dims, velocity[:, :2], -rots - np.pi / 2], axis=1
+                [locs, dims, velocity[:, :2], rots], axis=1   #-rots - np.pi / 2
             )
-            # gt_boxes = np.concatenate([locs, dims, rots], axis=1)
 
             assert len(annotations) == len(gt_boxes) == len(velocity)
 
-            if not filter_zero:
-                info["gt_boxes"] = gt_boxes
-                info["gt_boxes_velocity"] = velocity
-                info["gt_names"] = np.array([general_to_detection[name] for name in names])
-                info["gt_boxes_token"] = tokens
-            else:
-                info["gt_boxes"] = gt_boxes[mask, :]
-                info["gt_boxes_velocity"] = velocity[mask, :]
-                info["gt_names"] = np.array([general_to_detection[name] for name in names])[mask]
-                info["gt_boxes_token"] = tokens[mask]
+            info["gt_boxes"] = gt_boxes
+            info["gt_boxes_velocity"] = velocity
+            info["gt_names"] = np.array([general_to_detection[name] for name in names])
+            info["gt_boxes_token"] = tokens
 
         if sample["scene_token"] in train_scenes:
             train_nusc_infos.append(info)
@@ -543,6 +649,67 @@ def quaternion_yaw(q: Quaternion) -> float:
     yaw = np.arctan2(v[1], v[0])
 
     return yaw
+
+def create_nuscenes_infos_test(root_path, version="v1.0-trainval", nsweeps=10):
+    nusc = NuScenes(version=version, dataroot=root_path, verbose=True)
+    available_vers = ["v1.0-trainval", "v1.0-test", "v1.0-mini"]
+    assert version in available_vers
+    if version == "v1.0-trainval":
+        train_scenes = splits.train
+        # random.shuffle(train_scenes)
+        # train_scenes = train_scenes[:int(len(train_scenes)*0.2)]
+        val_scenes = splits.val
+    elif version == "v1.0-test":
+        train_scenes = splits.test
+        val_scenes = []
+    elif version == "v1.0-mini":
+        train_scenes = splits.mini_train
+        val_scenes = splits.mini_val
+    else:
+        raise ValueError("unknown")
+    test = "test" in version
+    root_path = Path(root_path)
+    # filter exist scenes. you may only download part of dataset.
+    available_scenes = _get_available_scenes(nusc)
+    available_scene_names = [s["name"] for s in available_scenes]
+    train_scenes = list(filter(lambda x: x in available_scene_names, train_scenes))
+    val_scenes = list(filter(lambda x: x in available_scene_names, val_scenes))
+    train_scenes = set(
+        [
+            available_scenes[available_scene_names.index(s)]["token"]
+            for s in train_scenes
+        ]
+    )
+    val_scenes = set(
+        [available_scenes[available_scene_names.index(s)]["token"] for s in val_scenes]
+    )
+    if test:
+        print(f"test scene: {len(train_scenes)}")
+    else:
+        print(f"train scene: {len(train_scenes)}, val scene: {len(val_scenes)}")
+
+    train_nusc_infos, val_nusc_infos = _fill_trainval_infos(
+        nusc, train_scenes, val_scenes, test, nsweeps=nsweeps
+    )
+
+    if test:
+        print(f"test sample: {len(train_nusc_infos)}")
+        with open(
+            root_path / "infos_test_{:02d}sweeps_withvelo.pkl".format(nsweeps), "wb"
+        ) as f:
+            pickle.dump(train_nusc_infos, f)
+    else:
+        print(
+            f"train sample: {len(train_nusc_infos)}, val sample: {len(val_nusc_infos)}"
+        )
+        with open(
+            root_path / "infos_train_{:02d}sweeps_withvelo.pkl".format(nsweeps), "wb"
+        ) as f:
+            pickle.dump(train_nusc_infos, f)
+        with open(
+            root_path / "infos_val_{:02d}sweeps_withvelo.pkl".format(nsweeps), "wb"
+        ) as f:
+            pickle.dump(val_nusc_infos, f)
 
 
 def create_nuscenes_infos(root_path, version="v1.0-trainval", nsweeps=10, filter_zero=True):
@@ -619,4 +786,4 @@ def eval_main(nusc, eval_version, res_path, eval_set, output_dir):
         output_dir=output_dir,
         verbose=True,
     )
-    metrics_summary = nusc_eval.main(plot_examples=10,)
+    metrics_summary = nusc_eval.main(plot_examples=0,)

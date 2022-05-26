@@ -206,17 +206,22 @@ def build_dbsampler(cfg, logger=None):
     prepors = [build_db_preprocess(c, logger=logger) for c in cfg.db_prep_steps]
     db_prepor = DataBasePreprocessor(prepors)
     rate = cfg.rate
-    grot_range = cfg.global_random_rotation_range_per_object
+    #grot_range = cfg.global_random_rotation_range_per_object
+    gt_drop_percentage = cfg.gt_drop_percentage
+    gt_drop_max_keep_points = cfg.gt_drop_max_keep_points
     groups = cfg.sample_groups
+    point_dim = cfg.point_dim
     # groups = [dict(g.name_to_max_num) for g in groups]
     info_path = cfg.db_info_path
     with open(info_path, "rb") as f:
         db_infos = pickle.load(f)
-    grot_range = list(grot_range)
-    if len(grot_range) == 0:
-        grot_range = None
+    #grot_range = list(grot_range)
+    # if len(grot_range) == 0:
+    #     grot_range = None
     sampler = DataBaseSamplerV2(
-        db_infos, groups, db_prepor, rate, grot_range, logger=logger
+        #db_infos, groups, db_prepor, rate, grot_range, logger=logger
+        db_infos, groups, db_prepor, rate, gt_drop_percentage, gt_drop_max_keep_points, 
+        point_dim, logger=logger
     )
 
     return sampler

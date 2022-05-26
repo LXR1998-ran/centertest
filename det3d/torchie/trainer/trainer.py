@@ -30,36 +30,70 @@ from .utils import (
     synchronize,
 )
 
-
+# simtrack
 def example_to_device(example, device, non_blocking=False) -> dict:
     example_torch = {}
-    float_names = ["voxels", "bev_map"]
     for k, v in example.items():
-        if k in ["anchors", "anchors_mask", "reg_targets", "reg_weights", "labels", "hm",
-                "anno_box", "ind", "mask", 'cat', 'points']:
+        #import pdb; pdb.set_trace()
+        
+        if k in ["anchors", "anchors_mask", "reg_targets", "reg_weights", "labels", "hm", "curr_hm", 
+                "anno_box", "curr_anno_box", "ind", "currind", "mask", "curr_mask", 'cat',"curr_cat"]:
             example_torch[k] = [res.to(device, non_blocking=non_blocking) for res in v]
         elif k in [
-            "voxels",
+            "voxels", "curr_voxels",
             "bev_map",
-            "coordinates",
-            "num_points",
-            "num_voxels",
-            "cyv_voxels",
-            "cyv_num_voxels",
-            "cyv_coordinates",
-            "cyv_num_points",
-            "gt_boxes_and_cls"
+            "coordinates", "curr_coordinates",
+            "num_points", "curr_num_points",
+            "points",
+            "num_voxels", "curr_num_voxels"
         ]:
+            #v = torch.stack(v, dim=1)
             example_torch[k] = v.to(device, non_blocking=non_blocking)
+        #elif k == "points":
+            #v = v[0]
+            #example_torch[k] = v.to(device, non_blocking=non_blocking)
         elif k == "calib":
             calib = {}
+            #v = torch.stack(v, dim=1)
             for k1, v1 in v.items():
                 calib[k1] = v1.to(device, non_blocking=non_blocking)
             example_torch[k] = calib
         else:
+            #v = torch.stack(v, dim=1)
             example_torch[k] = v
 
     return example_torch
+
+# origional centerpoint
+# def example_to_device(example, device, non_blocking=False) -> dict:
+#     example_torch = {}
+#     float_names = ["voxels", "bev_map"]
+#     for k, v in example.items():
+#         if k in ["anchors", "anchors_mask", "reg_targets", "reg_weights", "labels", "hm",
+#                 "anno_box", "ind", "mask", 'cat', 'points']:
+#             example_torch[k] = [res.to(device, non_blocking=non_blocking) for res in v]
+#         elif k in [
+#             "voxels",
+#             "bev_map",
+#             "coordinates",
+#             "num_points",
+#             "num_voxels",
+#             "cyv_voxels",
+#             "cyv_num_voxels",
+#             "cyv_coordinates",
+#             "cyv_num_points",
+#             "gt_boxes_and_cls"
+#         ]:
+#             example_torch[k] = v.to(device, non_blocking=non_blocking)
+#         elif k == "calib":
+#             calib = {}
+#             for k1, v1 in v.items():
+#                 calib[k1] = v1.to(device, non_blocking=non_blocking)
+#             example_torch[k] = calib
+#         else:
+#             example_torch[k] = v
+
+#     return example_torch
 
 
 def parse_second_losses(losses):
@@ -141,7 +175,7 @@ class Trainer(object):
     def __init__(
         self,
         model,
-        batch_processor,
+        #batch_processor,
         optimizer=None,
         lr_scheduler=None,
         work_dir=None,
@@ -149,12 +183,12 @@ class Trainer(object):
         logger=None,
         **kwargs,
     ):
-        assert callable(batch_processor)
+        #assert callable(batch_processor)
         self.model = model
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
 
-        self.batch_processor = batch_processor
+        #self.batch_processor = batch_processor
 
         # Create work_dir
         if torchie.is_str(work_dir):
@@ -370,7 +404,8 @@ class Trainer(object):
             del losses
 
             outputs = dict(
-                loss=loss, log_vars=log_vars, num_samples=-1  # TODO: FIX THIS
+                #loss=loss, log_vars=log_vars, num_samples=-1  # TODO: FIX THIS
+                loss=loss, log_vars=log_vars, num_samples=len(example["num_voxels"])
             )
             self.call_hook("after_parse_loss")
 
@@ -438,7 +473,7 @@ class Trainer(object):
             self._inner_iter = i
             self.call_hook("before_val_iter")
             with torch.no_grad():
-                outputs = self.batch_processor(
+                outputs = self.batch_processor_inline(
                     self.model, data_batch, train_mode=False, **kwargs
                 )
             for output in outputs:
@@ -468,6 +503,8 @@ class Trainer(object):
 
         # torch.save(predictions, "final_predictions_debug.pkl")
         # TODO fix evaluation module
+        # output_dir = Path(self.work_dir) / "results" / f"epoch_{self.epoch}"
+        # output_dir.mkdir(parents=True, exist_ok=True)
         result_dict, _ = self.data_loader.dataset.evaluation(
             predictions, output_dir=self.work_dir
         )

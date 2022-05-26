@@ -38,7 +38,7 @@ class PFNLayer(nn.Module):
         self.norm = build_norm_layer(self.norm_cfg, self.units)[1]
 
     def forward(self, inputs):
-
+        #import pdb; pdb.set_trace()
         x = self.linear(inputs)
         torch.backends.cudnn.enabled = False
         x = self.norm(x.permute(0, 2, 1).contiguous()).permute(0, 2, 1).contiguous()
@@ -59,12 +59,18 @@ class PFNLayer(nn.Module):
 class PillarFeatureNet(nn.Module):
     def __init__(
         self,
-        num_input_features=4,
-        num_filters=(64,),
-        with_distance=False,
-        voxel_size=(0.2, 0.2, 4),
-        pc_range=(0, -40, -3, 70.4, 40, 1),
-        norm_cfg=None,
+        # num_input_features=4,
+        # num_filters=(64,),
+        # with_distance=False,
+        # voxel_size=(0.2, 0.2, 4),
+        # pc_range=(0, -40, -3, 70.4, 40, 1),
+        # norm_cfg=None,
+        num_input_features,
+        num_filters,
+        with_distance,
+        voxel_size,
+        pc_range,
+        norm_cfg,       
         virtual=False
     ):
         """
@@ -82,12 +88,12 @@ class PillarFeatureNet(nn.Module):
         self.name = "PillarFeatureNet"
         assert len(num_filters) > 0
 
-        self.num_input = num_input_features
+        #self.num_input = num_input_features
         num_input_features += 5
         if with_distance:
             num_input_features += 1
         self._with_distance = with_distance
-
+        print(num_input_features)
         # Create PillarFeatureNet layers
         num_filters = [num_input_features] + list(num_filters)
         pfn_layers = []
@@ -122,7 +128,7 @@ class PillarFeatureNet(nn.Module):
             virtual_points[..., -2] = 1
             features[..., -2] = 0 
             features[virtual_point_mask] = virtual_points
-
+        #import pdb; pdb.set_trace()
         dtype = features.dtype
         # Find distance of x, y, and z from cluster center
         # features = features[:, :, :self.num_input]
@@ -133,6 +139,7 @@ class PillarFeatureNet(nn.Module):
 
         # Find distance of x, y, and z from pillar center
         # f_center = features[:, :, :2]
+        # offset?
         f_center = torch.zeros_like(features[:, :, :2])
         f_center[:, :, 0] = features[:, :, 0] - (
             coors[:, 3].to(dtype).unsqueeze(1) * self.vx + self.x_offset
@@ -165,7 +172,7 @@ class PillarFeatureNet(nn.Module):
 @BACKBONES.register_module
 class PointPillarsScatter(nn.Module):
     def __init__(
-        self, num_input_features=64, norm_cfg=None, name="PointPillarsScatter", **kwargs
+        self, num_input_features, norm_cfg=None, name="PointPillarsScatter", **kwargs
     ):
         """
         Point Pillar's Scatter.
@@ -207,7 +214,7 @@ class PointPillarsScatter(nn.Module):
             # Now scatter the blob back to the canvas.
             canvas[:, indices] = voxels
 
-            # Append to a list for later stacking.
+            # Append to a list for later stacking.n
             batch_canvas.append(canvas)
 
         # Stack to 3-dim tensor (batch-size, nchannels, nrows*ncols)

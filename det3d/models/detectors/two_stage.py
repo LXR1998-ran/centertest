@@ -35,7 +35,7 @@ class TwoStageDetector(BaseDetector):
             self.second_stage.append(builder.build_second_stage_module(module))
 
         self.roi_head = builder.build_roi_head(roi_head)
-
+        import pdb; pdb.set_trace()
         self.num_point = num_point
         self.use_final_feature = use_final_feature
 

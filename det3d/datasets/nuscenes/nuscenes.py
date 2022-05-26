@@ -28,22 +28,23 @@ from det3d.datasets.registry import DATASETS
 
 @DATASETS.register_module
 class NuScenesDataset(PointCloudDataset):
-    NumPointFeatures = 5  # x, y, z, intensity, ring_index
+    NumPointFeatures = 5  # x, y, z, intensity, timestamp, (beam_id)
 
     def __init__(
         self,
         info_path,
         root_path,
-        nsweeps=0, # here set to zero to catch unset nsweep
+        #nsweeps=0, # here set to zero to catch unset nsweep
+        nsweeps = 1,
         cfg=None,
         pipeline=None,
         class_names=None,
         test_mode=False,
         version="v1.0-trainval",
-        load_interval=1,
+        #load_interval=1,
         **kwargs,
     ):
-        self.load_interval = load_interval 
+        #self.load_interval = load_interval 
         super(NuScenesDataset, self).__init__(
             root_path, info_path, pipeline, test_mode=test_mode, class_names=class_names
         )
@@ -78,7 +79,7 @@ class NuScenesDataset(PointCloudDataset):
         with open(self._info_path, "rb") as f:
             _nusc_infos_all = pickle.load(f)
 
-        _nusc_infos_all = _nusc_infos_all[::self.load_interval]
+        #_nusc_infos_all = _nusc_infos_all[::self.load_interval]
 
         if not self.test_mode:  # if training
             self.frac = int(len(_nusc_infos_all) * 0.25)
@@ -130,39 +131,46 @@ class NuScenesDataset(PointCloudDataset):
     def ground_truth_annotations(self):
         if "gt_boxes" not in self._nusc_infos[0]:
             return None
-        cls_range_map = config_factory(self.eval_version).serialize()['class_range']
         gt_annos = []
         for info in self._nusc_infos:
-            gt_names = np.array(info["gt_names"])
-            gt_boxes = info["gt_boxes"]
-            mask = np.array([n != "ignore" for n in gt_names], dtype=np.bool_)
-            gt_names = gt_names[mask]
-            gt_boxes = gt_boxes[mask]
-            # det_range = np.array([cls_range_map[n] for n in gt_names_mapped])
-            det_range = np.array([cls_range_map[n] for n in gt_names])
-            det_range = det_range[..., np.newaxis] @ np.array([[-1, -1, 1, 1]])
-            mask = (gt_boxes[:, :2] >= det_range[:, :2]).all(1)
-            mask &= (gt_boxes[:, :2] <= det_range[:, 2:]).all(1)
-            N = int(np.sum(mask))
-            gt_annos.append(
-                {
-                    "bbox": np.tile(np.array([[0, 0, 50, 50]]), [N, 1]),
-                    "alpha": np.full(N, -10),
-                    "occluded": np.zeros(N),
-                    "truncated": np.zeros(N),
-                    "name": gt_names[mask],
-                    "location": gt_boxes[mask][:, :3],
-                    "dimensions": gt_boxes[mask][:, 3:6],
-                    "rotation_y": gt_boxes[mask][:, 6],
-                    "token": info["token"],
-                }
-            )
+            gt_annos.append({"token": info["token"]})
         return gt_annos
+    # def ground_truth_annotations(self):
+    #     if "gt_boxes" not in self._nusc_infos[0]:
+    #         return None
+    #     cls_range_map = config_factory(self.eval_version).serialize()['class_range']
+    #     gt_annos = []
+    #     for info in self._nusc_infos:
+    #         gt_names = np.array(info["gt_names"])
+    #         gt_boxes = info["gt_boxes"]
+    #         mask = np.array([n != "ignore" for n in gt_names], dtype=np.bool_)
+    #         gt_names = gt_names[mask]
+    #         gt_boxes = gt_boxes[mask]
+    #         # det_range = np.array([cls_range_map[n] for n in gt_names_mapped])
+    #         det_range = np.array([cls_range_map[n] for n in gt_names])
+    #         det_range = det_range[..., np.newaxis] @ np.array([[-1, -1, 1, 1]])
+    #         mask = (gt_boxes[:, :2] >= det_range[:, :2]).all(1)
+    #         mask &= (gt_boxes[:, :2] <= det_range[:, 2:]).all(1)
+    #         N = int(np.sum(mask))
+    #         gt_annos.append(
+    #             {
+    #                 "bbox": np.tile(np.array([[0, 0, 50, 50]]), [N, 1]),
+    #                 "alpha": np.full(N, -10),
+    #                 "occluded": np.zeros(N),
+    #                 "truncated": np.zeros(N),
+    #                 "name": gt_names[mask],
+    #                 "location": gt_boxes[mask][:, :3],
+    #                 "dimensions": gt_boxes[mask][:, 3:6],
+    #                 "rotation_y": gt_boxes[mask][:, 6],
+    #                 "token": info["token"],
+    #             }
+    #         )
+    #     return gt_annos
 
     def get_sensor_data(self, idx):
 
         info = self._nusc_infos[idx]
-
+        #import pdb; pdb.set_trace()
         res = {
             "lidar": {
                 "type": "lidar",
@@ -176,6 +184,8 @@ class NuScenesDataset(PointCloudDataset):
                 "num_point_features": self._num_point_features,
                 "token": info["token"],
             },
+            'ref_from_car':info['ref_from_car'], 
+            'car_from_global':info['car_from_global'],
             "calib": None,
             "cam": {},
             "mode": "val" if self.test_mode else "train",
@@ -183,7 +193,7 @@ class NuScenesDataset(PointCloudDataset):
         }
 
         data, _ = self.pipeline(res, info)
-
+        #import pdb; pdb.set_trace()
         return data
 
     def __getitem__(self, idx):
@@ -329,3 +339,93 @@ class NuScenesDataset(PointCloudDataset):
             res = None
 
         return res, None
+
+    def evaluation_tracking(self, detections, output_dir=None, testset=False):
+        version = self.version
+        eval_set_map = {
+            "v1.0-mini": "mini_val",
+            "v1.0-trainval": "val",
+            "v1.0-test": "test",
+        }
+
+        if not testset:
+            dets = []
+            gt_annos = self.ground_truth_annotations
+            assert gt_annos is not None
+
+            miss = 0
+            for gt in gt_annos:
+                try:
+                    dets.append(detections[gt["token"]])
+                except Exception:
+                    miss += 1
+
+            assert miss == 0
+        else:
+            dets = [v for _, v in detections.items()]
+
+        nusc_annos = {
+            "results": {},
+            "meta": None,
+        }
+
+        nusc = NuScenes(version=version, dataroot=str(self._root_path), verbose=True)
+
+        mapped_class_names = []
+        for n in self._class_names:
+            if n in self._name_mapping:
+                mapped_class_names.append(self._name_mapping[n])
+            else:
+                mapped_class_names.append(n)
+
+        for det in dets:
+            annos = []
+            boxes = _second_det_to_nusc_box(det)
+            boxes = _lidar_nusc_box_to_global(nusc, boxes, det["metadata"]["token"])
+            for i, box in enumerate(boxes):
+                name = mapped_class_names[box.label]
+                if name in ['construction_vehicle', "barrier", "traffic_cone"]:
+                    continue
+                nusc_anno = {
+                    "sample_token": det["metadata"]["token"],
+                    "translation": box.center.tolist(),
+                    "size": box.wlh.tolist(),
+                    "rotation": box.orientation.elements.tolist(),
+                    "velocity": box.velocity[:2].tolist(),
+                    "tracking_name": name,
+                    "tracking_score": box.score,
+                    "tracking_id": str(int(det['tracking_id'][i])),
+                }
+                annos.append(nusc_anno)
+            nusc_annos["results"].update({det["metadata"]["token"]: annos})
+
+        nusc_annos["meta"] = {
+            "use_camera": False,
+            "use_lidar": True,
+            "use_radar": False,
+            "use_map": False,
+            "use_external": False,
+        }
+
+        name = self._info_path.split("/")[-1].split(".")[0]
+        res_path = str(Path(output_dir) / Path('tracking_results' + ".json"))
+        with open(res_path, "w") as f:
+            json.dump(nusc_annos, f)
+
+        print(f"Finish generate predictions for testset, save to {res_path}")
+
+        from nuscenes.eval.tracking.evaluate import TrackingEval 
+        from nuscenes.eval.common.config import config_factory as track_configs
+
+        
+        cfg = track_configs("tracking_nips_2019")
+        nusc_eval = TrackingEval(
+            config=cfg,
+            result_path=res_path,
+            eval_set='val',
+            output_dir=output_dir,
+            verbose=True,
+            nusc_version="v1.0-trainval",
+            nusc_dataroot=self._root_path,
+        )
+        metrics_summary = nusc_eval.main()    
